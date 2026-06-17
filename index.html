@@ -19,16 +19,20 @@
 
   .container { width: 100%; max-width: 900px; padding: 0 20px; }
 
-  .mode-tabs {
+  .mode-tabs, .style-tabs {
     display: flex; gap: 8px; justify-content: center; margin-bottom: 24px;
+    flex-wrap: wrap;
   }
-  .mode-tab {
+  .mode-tab, .style-tab {
     padding: 10px 28px; border-radius: 12px; border: 1px solid #333;
     background: #1a1a1a; color: #888; cursor: pointer; font-size: 0.95rem;
     font-weight: 500; transition: all .2s;
   }
-  .mode-tab:hover { border-color: #666; color: #ccc; }
+  .mode-tab:hover, .style-tab:hover { border-color: #666; color: #ccc; }
   .mode-tab.active { background: #7c5cfc; border-color: #7c5cfc; color: #fff; }
+  .style-tab.active { background: #f0a040; border-color: #f0a040; color: #111; }
+
+  #styleRow { display: none; }
 
   .drop-zone {
     border: 2px dashed #444; border-radius: 16px;
@@ -95,15 +99,9 @@
 
   #fileInput { display: none; }
 
-  .slider-row {
-    display: flex; align-items: center; gap: 10px; justify-content: center;
-    margin-bottom: 12px; flex-wrap: wrap;
-  }
-  .slider-row label { font-size: 0.85rem; color: #aaa; }
-  .slider-row input[type=range] { width: 140px; accent-color: #7c5cfc; }
-
   @media (max-width: 600px) {
     .preview-area.active { grid-template-columns: 1fr; }
+    .style-tab { padding: 8px 16px; font-size: 0.85rem; }
   }
 </style>
 </head>
@@ -116,7 +114,15 @@
   <div class="container">
     <div class="mode-tabs">
       <button class="mode-tab active" data-mode="remove-bg">🎯 一键抠图</button>
-      <button class="mode-tab" data-mode="cartoon">🎨 卡通化</button>
+      <button class="mode-tab" data-mode="cartoon">🎨 风格化</button>
+    </div>
+
+    <div class="style-tabs" id="styleRow">
+      <button class="style-tab active" data-style="comic">📘 漫画</button>
+      <button class="style-tab" data-style="sketch">✏️ 素描</button>
+      <button class="style-tab" data-style="oil">🖼️ 油画</button>
+      <button class="style-tab" data-style="pixel">👾 像素</button>
+      <button class="style-tab" data-style="emboss">🗿 浮雕</button>
     </div>
 
     <div class="drop-zone" id="dropZone">
@@ -141,7 +147,7 @@
 
     <div class="actions">
       <button class="btn btn-primary" id="processBtn" disabled>开始抠图</button>
-      <button class="btn btn-cartoon" id="cartoonBtn" disabled style="display:none">生成卡通图</button>
+      <button class="btn btn-cartoon" id="cartoonBtn" disabled style="display:none">生成风格图</button>
       <button class="btn btn-secondary" id="downloadBtn" disabled>下载 PNG</button>
       <button class="btn btn-danger" id="clearBtn" style="display:none">清除</button>
     </div>
@@ -163,10 +169,17 @@
     const resultLabel = document.getElementById("resultLabel");
     const statusEl = document.getElementById("status");
     const modeTabs = document.querySelectorAll(".mode-tab");
+    const styleTabs = document.querySelectorAll(".style-tab");
+    const styleRow = document.getElementById("styleRow");
 
     let selectedFile = null;
     let resultBlob = null;
     let currentMode = "remove-bg";
+    let currentStyle = "comic";
+
+    const styleNames = {
+      comic: "漫画", sketch: "素描", oil: "油画", pixel: "像素", emboss: "浮雕"
+    };
 
     // Mode switching
     modeTabs.forEach(tab => {
@@ -178,16 +191,30 @@
       });
     });
 
+    // Style switching
+    styleTabs.forEach(tab => {
+      tab.addEventListener("click", () => {
+        styleTabs.forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+        currentStyle = tab.dataset.style;
+        resultImg.src = "";
+        resultBlob = null;
+        downloadBtn.disabled = true;
+      });
+    });
+
     function updateUIForMode() {
       if (currentMode === "remove-bg") {
+        styleRow.style.display = "none";
         processBtn.style.display = "inline-block";
         cartoonBtn.style.display = "none";
         resultLabel.textContent = "抠图结果";
         if (selectedFile) processBtn.disabled = false;
       } else {
+        styleRow.style.display = "flex";
         processBtn.style.display = "none";
         cartoonBtn.style.display = "inline-block";
-        resultLabel.textContent = "卡通效果";
+        resultLabel.textContent = styleNames[currentStyle] + "效果";
         if (selectedFile) cartoonBtn.disabled = false;
       }
       resultImg.src = "";
@@ -217,56 +244,54 @@
       setStatus("已选择：" + file.name, "done");
     }
 
-    // --- Cartoon effect using Canvas ---
-    function cartoonifyImage(sourceImg) {
-      const maxDim = 1024;
-      let w = sourceImg.naturalWidth;
-      let h = sourceImg.naturalHeight;
+    // ====== Canvas helpers ======
+    function getImageData(sourceImg, maxDim) {
+      maxDim = maxDim || 1024;
+      let w = sourceImg.naturalWidth, h = sourceImg.naturalHeight;
       const scale = Math.min(maxDim / Math.max(w, h), 1);
-      w = Math.round(w * scale);
-      h = Math.round(h * scale);
-
+      w = Math.round(w * scale); h = Math.round(h * scale);
       const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
+      canvas.width = w; canvas.height = h;
       const ctx = canvas.getContext("2d");
       ctx.drawImage(sourceImg, 0, 0, w, h);
-      const src = ctx.getImageData(0, 0, w, h);
+      return { canvas, ctx, w, h, data: ctx.getImageData(0, 0, w, h) };
+    }
 
-      // Step 1: Bilateral-like smoothing (simple 3x3 blur pass)
-      const blurred = new Uint8ClampedArray(src.data);
+    function toBlob(canvas) {
+      return new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    }
+
+    // ====== Style algorithms ======
+
+    function comicStyle(img) {
+      const { canvas, ctx, w, h, data } = getImageData(img);
+      const src = data.data;
+      // Bilateral-like blur
+      const blurred = new Uint8ClampedArray(src);
       for (let y = 1; y < h - 1; y++) {
         for (let x = 1; x < w - 1; x++) {
           const idx = (y * w + x) * 4;
           for (let c = 0; c < 3; c++) {
             let sum = 0;
-            for (let dy = -1; dy <= 1; dy++) {
-              for (let dx = -1; dx <= 1; dx++) {
-                sum += src.data[((y+dy) * w + (x+dx)) * 4 + c];
-              }
-            }
+            for (let dy = -1; dy <= 1; dy++)
+              for (let dx = -1; dx <= 1; dx++)
+                sum += src[((y+dy) * w + (x+dx)) * 4 + c];
             blurred[idx + c] = Math.round(sum / 9);
           }
         }
       }
-      src.data.set(blurred);
-
-      // Step 2: Color quantization (posterize to fewer levels)
-      const levels = 8;
-      const step = 255 / (levels - 1);
-      for (let i = 0; i < src.data.length; i += 4) {
-        for (let c = 0; c < 3; c++) {
-          src.data[i + c] = Math.round(Math.round(src.data[i + c] / step) * step);
-        }
+      data.data.set(blurred);
+      // Color quantization
+      const levels = 8, step = 255 / (levels - 1);
+      for (let i = 0; i < data.data.length; i += 4) {
+        for (let c = 0; c < 3; c++)
+          data.data[i + c] = Math.round(Math.round(data.data[i + c] / step) * step);
       }
-
-      // Step 3: Edge detection (Sobel)
-      const edges = new Uint8ClampedArray(w * h);
+      // Edge detection
       const gray = new Uint8ClampedArray(w * h);
-      for (let i = 0; i < src.data.length; i += 4) {
-        const g = 0.299 * src.data[i] + 0.587 * src.data[i+1] + 0.114 * src.data[i+2];
-        gray[i >> 2] = g;
-      }
+      for (let i = 0; i < data.data.length; i += 4)
+        gray[i >> 2] = 0.299 * data.data[i] + 0.587 * data.data[i+1] + 0.114 * data.data[i+2];
+      const edges = new Uint8ClampedArray(w * h);
       for (let y = 1; y < h - 1; y++) {
         for (let x = 1; x < w - 1; x++) {
           const i = y * w + x;
@@ -275,40 +300,161 @@
           edges[i] = Math.min(255, Math.sqrt(gx*gx + gy*gy));
         }
       }
-
-      // Step 4: Overlay edges on quantized colors
-      const edgeThreshold = 60;
-      for (let i = 0; i < src.data.length; i += 4) {
+      // Overlay
+      const edgeT = 60;
+      for (let i = 0; i < data.data.length; i += 4) {
         const e = edges[i >> 2];
-        if (e > edgeThreshold) {
-          const darkness = Math.min(1, (e - edgeThreshold) / 80);
-          src.data[i] = Math.round(src.data[i] * (1 - darkness));
-          src.data[i+1] = Math.round(src.data[i+1] * (1 - darkness));
-          src.data[i+2] = Math.round(src.data[i+2] * (1 - darkness));
+        if (e > edgeT) {
+          const d = Math.min(1, (e - edgeT) / 80);
+          data.data[i] = Math.round(data.data[i] * (1 - d));
+          data.data[i+1] = Math.round(data.data[i+1] * (1 - d));
+          data.data[i+2] = Math.round(data.data[i+2] * (1 - d));
         }
       }
-
-      ctx.putImageData(src, 0, 0);
+      ctx.putImageData(data, 0, 0);
       return canvas;
     }
 
+    function sketchStyle(img) {
+      const { canvas, ctx, w, h, data } = getImageData(img);
+      // Grayscale
+      for (let i = 0; i < data.data.length; i += 4) {
+        const g = 0.299 * data.data[i] + 0.587 * data.data[i+1] + 0.114 * data.data[i+2];
+        data.data[i] = data.data[i+1] = data.data[i+2] = g;
+      }
+      // Invert
+      for (let i = 0; i < data.data.length; i += 4) {
+        data.data[i] = data.data[i+1] = data.data[i+2] = 255 - data.data[i];
+      }
+      // Gaussian blur (3x3)
+      const blurred = new Uint8ClampedArray(data.data);
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const idx = (y * w + x) * 4;
+          blurred[idx] = Math.round((data.data[idx-4-w*4] + 2*data.data[idx-w*4] + data.data[idx+4-w*4]
+            + 2*data.data[idx-4] + 4*data.data[idx] + 2*data.data[idx+4]
+            + data.data[idx-4+w*4] + 2*data.data[idx+w*4] + data.data[idx+4+w*4]) / 16);
+          blurred[idx+1] = blurred[idx+2] = blurred[idx];
+        }
+      }
+      data.data.set(blurred);
+      // Color dodge blend: base / (255 - blend) * 255
+      const orig = getImageData(img);
+      for (let i = 0; i < data.data.length; i += 4) {
+        const base = 0.299 * orig.data.data[i] + 0.587 * orig.data.data[i+1] + 0.114 * orig.data.data[i+2];
+        const blend = data.data[i];
+        const v = Math.min(255, Math.round((base * 255) / Math.max(1, 255 - blend)));
+        data.data[i] = data.data[i+1] = data.data[i+2] = v;
+      }
+      ctx.putImageData(data, 0, 0);
+      return canvas;
+    }
+
+    function oilStyle(img) {
+      const { canvas, ctx, w, h, data } = getImageData(img, 800);
+      const src = data.data;
+      const radius = 4, levels = 16;
+      const out = new Uint8ClampedArray(src.length);
+      for (let y = radius; y < h - radius; y++) {
+        for (let x = radius; x < w - radius; x++) {
+          const bins = new Array(levels).fill(0);
+          const sumR = new Array(levels).fill(0);
+          const sumG = new Array(levels).fill(0);
+          const sumB = new Array(levels).fill(0);
+          for (let dy = -radius; dy <= radius; dy++) {
+            for (let dx = -radius; dx <= radius; dx++) {
+              const idx = ((y+dy) * w + (x+dx)) * 4;
+              const r = src[idx], g = src[idx+1], b = src[idx+2];
+              const lvl = Math.min(levels - 1, Math.floor((r + g + b) / (3 * 256 / levels)));
+              bins[lvl]++;
+              sumR[lvl] += r; sumG[lvl] += g; sumB[lvl] += b;
+            }
+          }
+          let best = 0, maxCount = 0;
+          for (let l = 0; l < levels; l++) {
+            if (bins[l] > maxCount) { maxCount = bins[l]; best = l; }
+          }
+          const idx = (y * w + x) * 4;
+          out[idx] = Math.round(sumR[best] / maxCount);
+          out[idx+1] = Math.round(sumG[best] / maxCount);
+          out[idx+2] = Math.round(sumB[best] / maxCount);
+          out[idx+3] = 255;
+        }
+      }
+      data.data.set(out);
+      ctx.putImageData(data, 0, 0);
+      return canvas;
+    }
+
+    function pixelStyle(img) {
+      const { canvas, ctx, w, h, data } = getImageData(img, 1024);
+      const blockSize = Math.max(4, Math.round(Math.min(w, h) / 64));
+      const src = data.data;
+      for (let by = 0; by < h; by += blockSize) {
+        for (let bx = 0; bx < w; bx += blockSize) {
+          let sr = 0, sg = 0, sb = 0, count = 0;
+          const ey = Math.min(by + blockSize, h);
+          const ex = Math.min(bx + blockSize, w);
+          for (let y = by; y < ey; y++) {
+            for (let x = bx; x < ex; x++) {
+              const idx = (y * w + x) * 4;
+              sr += src[idx]; sg += src[idx+1]; sb += src[idx+2];
+              count++;
+            }
+          }
+          const ar = Math.round(sr / count), ag = Math.round(sg / count), ab = Math.round(sb / count);
+          for (let y = by; y < ey; y++) {
+            for (let x = bx; x < ex; x++) {
+              const idx = (y * w + x) * 4;
+              data.data[idx] = ar; data.data[idx+1] = ag; data.data[idx+2] = ab;
+            }
+          }
+        }
+      }
+      ctx.putImageData(data, 0, 0);
+      return canvas;
+    }
+
+    function embossStyle(img) {
+      const { canvas, ctx, w, h, data } = getImageData(img);
+      // Grayscale
+      for (let i = 0; i < data.data.length; i += 4) {
+        const g = 0.299 * data.data[i] + 0.587 * data.data[i+1] + 0.114 * data.data[i+2];
+        data.data[i] = data.data[i+1] = data.data[i+2] = g;
+      }
+      const src = new Uint8ClampedArray(data.data);
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const idx = (y * w + x) * 4;
+          const v = src[((y-1)*w + (x-1))*4] - src[((y+1)*w + (x+1))*4] + 128;
+          data.data[idx] = data.data[idx+1] = data.data[idx+2] = Math.max(0, Math.min(255, v));
+        }
+      }
+      ctx.putImageData(data, 0, 0);
+      return canvas;
+    }
+
+    const styleFns = { comic: comicStyle, sketch: sketchStyle, oil: oilStyle, pixel: pixelStyle, emboss: embossStyle };
+
+    // ====== Cartoon button ======
     cartoonBtn.addEventListener("click", () => {
       if (!selectedFile) return;
       cartoonBtn.disabled = true;
-      setStatus("正在生成卡通效果...", "loading");
+      resultLabel.textContent = styleNames[currentStyle] + "效果";
+      setStatus("正在生成" + styleNames[currentStyle] + "风格...", "loading");
 
-      // Use requestAnimationFrame to let UI update before heavy work
       requestAnimationFrame(() => {
         setTimeout(() => {
           try {
-            const canvas = cartoonifyImage(originalImg);
-            canvas.toBlob((blob) => {
+            const fn = styleFns[currentStyle];
+            const resultCanvas = fn(originalImg);
+            toBlob(resultCanvas).then(blob => {
               resultBlob = blob;
               resultImg.src = URL.createObjectURL(blob);
               downloadBtn.disabled = false;
-              setStatus("卡通化完成！", "done");
+              setStatus(styleNames[currentStyle] + "风格完成！", "done");
               cartoonBtn.disabled = false;
-            }, "image/png");
+            });
           } catch (err) {
             console.error(err);
             setStatus("处理失败：" + err.message, "");
@@ -318,17 +464,15 @@
       });
     });
 
-    // --- Background removal ---
+    // ====== Background removal ======
     processBtn.addEventListener("click", async () => {
       if (!selectedFile) return;
       processBtn.disabled = true;
       setStatus("正在抠图中，请稍候...（首次加载模型可能需要几十秒）", "loading");
-
       try {
         const blob = await removeBackground(selectedFile);
         resultBlob = blob;
-        const url = URL.createObjectURL(blob);
-        resultImg.src = url;
+        resultImg.src = URL.createObjectURL(blob);
         downloadBtn.disabled = false;
         setStatus("抠图完成！", "done");
       } catch (err) {
@@ -365,7 +509,9 @@
       const url = URL.createObjectURL(resultBlob);
       const a = document.createElement("a");
       const baseName = selectedFile.name.replace(/\.[^.]+$/, "");
-      const suffix = currentMode === "remove-bg" ? "_去背景" : "_卡通";
+      const suffix = currentMode === "remove-bg"
+        ? "_去背景"
+        : "_" + styleNames[currentStyle];
       a.href = url;
       a.download = baseName + suffix + ".png";
       a.click();
