@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>一键抠图</title>
+<title>一键抠图 & 卡通化</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -18,6 +18,17 @@
   header p { color: #888; font-size: 0.9rem; margin-top: 6px; }
 
   .container { width: 100%; max-width: 900px; padding: 0 20px; }
+
+  .mode-tabs {
+    display: flex; gap: 8px; justify-content: center; margin-bottom: 24px;
+  }
+  .mode-tab {
+    padding: 10px 28px; border-radius: 12px; border: 1px solid #333;
+    background: #1a1a1a; color: #888; cursor: pointer; font-size: 0.95rem;
+    font-weight: 500; transition: all .2s;
+  }
+  .mode-tab:hover { border-color: #666; color: #ccc; }
+  .mode-tab.active { background: #7c5cfc; border-color: #7c5cfc; color: #fff; }
 
   .drop-zone {
     border: 2px dashed #444; border-radius: 16px;
@@ -71,6 +82,9 @@
   .btn-secondary:hover { background: #333; }
   .btn-danger { background: transparent; color: #e55; border: 1px solid #e554; }
   .btn-danger:hover { background: rgba(229,85,85,0.1); }
+  .btn-cartoon { background: #f0a040; color: #111; }
+  .btn-cartoon:hover { background: #e09030; }
+  .btn-cartoon:disabled { background: #444; color: #888; cursor: not-allowed; }
 
   .status {
     text-align: center; font-size: 0.85rem; color: #888;
@@ -81,6 +95,13 @@
 
   #fileInput { display: none; }
 
+  .slider-row {
+    display: flex; align-items: center; gap: 10px; justify-content: center;
+    margin-bottom: 12px; flex-wrap: wrap;
+  }
+  .slider-row label { font-size: 0.85rem; color: #aaa; }
+  .slider-row input[type=range] { width: 140px; accent-color: #7c5cfc; }
+
   @media (max-width: 600px) {
     .preview-area.active { grid-template-columns: 1fr; }
   }
@@ -88,11 +109,16 @@
 </head>
 <body>
   <header>
-    <h1>🪄 一键抠图</h1>
-    <p>上传图片，自动去除背景 · 所有处理在本地浏览器完成</p>
+    <h1>🪄 图片工具箱</h1>
+    <p>上传图片，选择效果 · 所有处理在本地浏览器完成</p>
   </header>
 
   <div class="container">
+    <div class="mode-tabs">
+      <button class="mode-tab active" data-mode="remove-bg">🎯 一键抠图</button>
+      <button class="mode-tab" data-mode="cartoon">🎨 卡通化</button>
+    </div>
+
     <div class="drop-zone" id="dropZone">
       <div class="icon">📤</div>
       <div class="hint">点击上传或拖拽图片到此处</div>
@@ -106,7 +132,7 @@
         <div class="img-wrap"><img id="originalImg" alt="原图"></div>
       </div>
       <div class="preview-card">
-        <div class="label">抠图结果</div>
+        <div class="label" id="resultLabel">结果</div>
         <div class="img-wrap"><img id="resultImg" alt="结果"></div>
       </div>
     </div>
@@ -115,6 +141,7 @@
 
     <div class="actions">
       <button class="btn btn-primary" id="processBtn" disabled>开始抠图</button>
+      <button class="btn btn-cartoon" id="cartoonBtn" disabled style="display:none">生成卡通图</button>
       <button class="btn btn-secondary" id="downloadBtn" disabled>下载 PNG</button>
       <button class="btn btn-danger" id="clearBtn" style="display:none">清除</button>
     </div>
@@ -123,18 +150,50 @@
   <script type="module">
     import { removeBackground } from "https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.6.0/+esm";
 
+    // DOM
     const dropZone = document.getElementById("dropZone");
     const fileInput = document.getElementById("fileInput");
     const processBtn = document.getElementById("processBtn");
+    const cartoonBtn = document.getElementById("cartoonBtn");
     const downloadBtn = document.getElementById("downloadBtn");
     const clearBtn = document.getElementById("clearBtn");
     const previewArea = document.getElementById("previewArea");
     const originalImg = document.getElementById("originalImg");
     const resultImg = document.getElementById("resultImg");
+    const resultLabel = document.getElementById("resultLabel");
     const statusEl = document.getElementById("status");
+    const modeTabs = document.querySelectorAll(".mode-tab");
 
     let selectedFile = null;
     let resultBlob = null;
+    let currentMode = "remove-bg";
+
+    // Mode switching
+    modeTabs.forEach(tab => {
+      tab.addEventListener("click", () => {
+        modeTabs.forEach(t => t.classList.remove("active"));
+        tab.classList.add("active");
+        currentMode = tab.dataset.mode;
+        updateUIForMode();
+      });
+    });
+
+    function updateUIForMode() {
+      if (currentMode === "remove-bg") {
+        processBtn.style.display = "inline-block";
+        cartoonBtn.style.display = "none";
+        resultLabel.textContent = "抠图结果";
+        if (selectedFile) processBtn.disabled = false;
+      } else {
+        processBtn.style.display = "none";
+        cartoonBtn.style.display = "inline-block";
+        resultLabel.textContent = "卡通效果";
+        if (selectedFile) cartoonBtn.disabled = false;
+      }
+      resultImg.src = "";
+      resultBlob = null;
+      downloadBtn.disabled = true;
+    }
 
     function setStatus(msg, cls) {
       statusEl.textContent = msg;
@@ -152,11 +211,133 @@
       originalImg.src = url;
       resultImg.src = "";
       previewArea.classList.add("active");
-      processBtn.disabled = false;
       downloadBtn.disabled = true;
       clearBtn.style.display = "inline-block";
+      updateUIForMode();
       setStatus("已选择：" + file.name, "done");
     }
+
+    // --- Cartoon effect using Canvas ---
+    function cartoonifyImage(sourceImg) {
+      const maxDim = 1024;
+      let w = sourceImg.naturalWidth;
+      let h = sourceImg.naturalHeight;
+      const scale = Math.min(maxDim / Math.max(w, h), 1);
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
+
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(sourceImg, 0, 0, w, h);
+      const src = ctx.getImageData(0, 0, w, h);
+
+      // Step 1: Bilateral-like smoothing (simple 3x3 blur pass)
+      const blurred = new Uint8ClampedArray(src.data);
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const idx = (y * w + x) * 4;
+          for (let c = 0; c < 3; c++) {
+            let sum = 0;
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                sum += src.data[((y+dy) * w + (x+dx)) * 4 + c];
+              }
+            }
+            blurred[idx + c] = Math.round(sum / 9);
+          }
+        }
+      }
+      src.data.set(blurred);
+
+      // Step 2: Color quantization (posterize to fewer levels)
+      const levels = 8;
+      const step = 255 / (levels - 1);
+      for (let i = 0; i < src.data.length; i += 4) {
+        for (let c = 0; c < 3; c++) {
+          src.data[i + c] = Math.round(Math.round(src.data[i + c] / step) * step);
+        }
+      }
+
+      // Step 3: Edge detection (Sobel)
+      const edges = new Uint8ClampedArray(w * h);
+      const gray = new Uint8ClampedArray(w * h);
+      for (let i = 0; i < src.data.length; i += 4) {
+        const g = 0.299 * src.data[i] + 0.587 * src.data[i+1] + 0.114 * src.data[i+2];
+        gray[i >> 2] = g;
+      }
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const i = y * w + x;
+          const gx = -1*gray[i-w-1] + gray[i-w+1] + -2*gray[i-1] + 2*gray[i+1] + -1*gray[i+w-1] + gray[i+w+1];
+          const gy = -1*gray[i-w-1] + -2*gray[i-w] + -1*gray[i-w+1] + gray[i+w-1] + 2*gray[i+w] + gray[i+w+1];
+          edges[i] = Math.min(255, Math.sqrt(gx*gx + gy*gy));
+        }
+      }
+
+      // Step 4: Overlay edges on quantized colors
+      const edgeThreshold = 60;
+      for (let i = 0; i < src.data.length; i += 4) {
+        const e = edges[i >> 2];
+        if (e > edgeThreshold) {
+          const darkness = Math.min(1, (e - edgeThreshold) / 80);
+          src.data[i] = Math.round(src.data[i] * (1 - darkness));
+          src.data[i+1] = Math.round(src.data[i+1] * (1 - darkness));
+          src.data[i+2] = Math.round(src.data[i+2] * (1 - darkness));
+        }
+      }
+
+      ctx.putImageData(src, 0, 0);
+      return canvas;
+    }
+
+    cartoonBtn.addEventListener("click", () => {
+      if (!selectedFile) return;
+      cartoonBtn.disabled = true;
+      setStatus("正在生成卡通效果...", "loading");
+
+      // Use requestAnimationFrame to let UI update before heavy work
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          try {
+            const canvas = cartoonifyImage(originalImg);
+            canvas.toBlob((blob) => {
+              resultBlob = blob;
+              resultImg.src = URL.createObjectURL(blob);
+              downloadBtn.disabled = false;
+              setStatus("卡通化完成！", "done");
+              cartoonBtn.disabled = false;
+            }, "image/png");
+          } catch (err) {
+            console.error(err);
+            setStatus("处理失败：" + err.message, "");
+            cartoonBtn.disabled = false;
+          }
+        }, 50);
+      });
+    });
+
+    // --- Background removal ---
+    processBtn.addEventListener("click", async () => {
+      if (!selectedFile) return;
+      processBtn.disabled = true;
+      setStatus("正在抠图中，请稍候...（首次加载模型可能需要几十秒）", "loading");
+
+      try {
+        const blob = await removeBackground(selectedFile);
+        resultBlob = blob;
+        const url = URL.createObjectURL(blob);
+        resultImg.src = url;
+        downloadBtn.disabled = false;
+        setStatus("抠图完成！", "done");
+      } catch (err) {
+        console.error(err);
+        setStatus("抠图失败：" + err.message, "");
+      } finally {
+        processBtn.disabled = false;
+      }
+    });
 
     // Click to pick
     dropZone.addEventListener("click", () => fileInput.click());
@@ -178,35 +359,15 @@
       if (e.dataTransfer.files.length) selectFile(e.dataTransfer.files[0]);
     });
 
-    // Process
-    processBtn.addEventListener("click", async () => {
-      if (!selectedFile) return;
-      processBtn.disabled = true;
-      setStatus("正在抠图中，请稍候...（首次加载模型可能需要几十秒）", "loading");
-
-      try {
-        const blob = await removeBackground(selectedFile);
-        resultBlob = blob;
-        const url = URL.createObjectURL(blob);
-        resultImg.src = url;
-        downloadBtn.disabled = false;
-        setStatus("抠图完成！", "done");
-      } catch (err) {
-        console.error(err);
-        setStatus("抠图失败：" + err.message, "");
-      } finally {
-        processBtn.disabled = false;
-      }
-    });
-
     // Download
     downloadBtn.addEventListener("click", () => {
       if (!resultBlob) return;
       const url = URL.createObjectURL(resultBlob);
       const a = document.createElement("a");
       const baseName = selectedFile.name.replace(/\.[^.]+$/, "");
+      const suffix = currentMode === "remove-bg" ? "_去背景" : "_卡通";
       a.href = url;
-      a.download = baseName + "_去背景.png";
+      a.download = baseName + suffix + ".png";
       a.click();
       URL.revokeObjectURL(url);
     });
@@ -219,6 +380,7 @@
       resultImg.src = "";
       previewArea.classList.remove("active");
       processBtn.disabled = true;
+      cartoonBtn.disabled = true;
       downloadBtn.disabled = true;
       clearBtn.style.display = "none";
       setStatus("", "");
