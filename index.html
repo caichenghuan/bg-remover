@@ -387,32 +387,25 @@
     }
 
     function pixelStyle(img) {
-      const { canvas, ctx, w, h, data } = getImageData(img, 1024);
-      const blockSize = Math.max(4, Math.round(Math.min(w, h) / 64));
-      const src = data.data;
-      for (let by = 0; by < h; by += blockSize) {
-        for (let bx = 0; bx < w; bx += blockSize) {
-          let sr = 0, sg = 0, sb = 0, count = 0;
-          const ey = Math.min(by + blockSize, h);
-          const ex = Math.min(bx + blockSize, w);
-          for (let y = by; y < ey; y++) {
-            for (let x = bx; x < ex; x++) {
-              const idx = (y * w + x) * 4;
-              sr += src[idx]; sg += src[idx+1]; sb += src[idx+2];
-              count++;
-            }
-          }
-          const ar = Math.round(sr / count), ag = Math.round(sg / count), ab = Math.round(sb / count);
-          for (let y = by; y < ey; y++) {
-            for (let x = bx; x < ex; x++) {
-              const idx = (y * w + x) * 4;
-              data.data[idx] = ar; data.data[idx+1] = ag; data.data[idx+2] = ab;
-            }
-          }
-        }
-      }
-      ctx.putImageData(data, 0, 0);
-      return canvas;
+      const maxDim = 1024;
+      let ow = img.naturalWidth, oh = img.naturalHeight;
+      const scale = Math.min(maxDim / Math.max(ow, oh), 1);
+      ow = Math.round(ow * scale); oh = Math.round(oh * scale);
+      // Pixel size: target ~48 blocks across
+      const pxSize = Math.max(2, Math.round(Math.min(ow, oh) / 48));
+      const sw = Math.round(ow / pxSize), sh = Math.round(oh / pxSize);
+      // Step 1: downscale to tiny resolution
+      const small = document.createElement("canvas");
+      small.width = sw; small.height = sh;
+      const sctx = small.getContext("2d");
+      sctx.drawImage(img, 0, 0, sw, sh);
+      // Step 2: upscale back with nearest-neighbor
+      const big = document.createElement("canvas");
+      big.width = ow; big.height = oh;
+      const bctx = big.getContext("2d");
+      bctx.imageSmoothingEnabled = false;
+      bctx.drawImage(small, 0, 0, ow, oh);
+      return big;
     }
 
     function embossStyle(img) {
@@ -535,3 +528,4 @@
   </script>
 </body>
 </html>
+
